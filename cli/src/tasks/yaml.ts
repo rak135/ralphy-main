@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import YAML from "yaml";
-import type { Task, TaskSource } from "./types.ts";
+import type { PrdDefaults, Task, TaskSource } from "./types.ts";
 
 interface YamlTask {
 	title: string;
@@ -9,9 +9,15 @@ interface YamlTask {
 	description?: string;
 	model?: string;
 	engine_args?: string[];
+	engine?: string;
 }
 
 interface YamlTaskFile {
+	defaults?: {
+		engine?: string;
+		model?: string;
+		engine_args?: string[];
+	};
 	tasks: YamlTask[];
 }
 
@@ -52,6 +58,7 @@ export class YamlTaskSource implements TaskSource {
 				completed: false,
 				model: t.model,
 				engineArgs: t.engine_args,
+				engine: t.engine,
 			}));
 	}
 
@@ -94,6 +101,7 @@ export class YamlTaskSource implements TaskSource {
 				completed: false,
 				model: t.model,
 				engineArgs: t.engine_args,
+				engine: t.engine,
 			}));
 	}
 
@@ -104,5 +112,15 @@ export class YamlTaskSource implements TaskSource {
 		const data = this.readFile();
 		const task = data.tasks?.find((t) => t.title === title);
 		return task?.parallel_group || 0;
+	}
+
+	getPrdDefaults(): PrdDefaults | undefined {
+		const data = this.readFile();
+		if (!data.defaults) return undefined;
+		return {
+			engine: data.defaults.engine,
+			model: data.defaults.model,
+			engineArgs: data.defaults.engine_args,
+		};
 	}
 }

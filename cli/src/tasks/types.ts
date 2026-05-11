@@ -1,4 +1,13 @@
 /**
+ * PRD-level defaults applied to every task unless overridden
+ */
+export interface PrdDefaults {
+	engine?: string;
+	model?: string;
+	engineArgs?: string[];
+}
+
+/**
  * A single task to be executed
  */
 export interface Task {
@@ -16,6 +25,8 @@ export interface Task {
 	model?: string;
 	/** Per-task engine args (replace global engineArgs for this task only) */
 	engineArgs?: string[];
+	/** Per-task engine override (overrides PRD defaults and CLI engine for this task only) */
+	engine?: string;
 }
 
 /**
@@ -41,4 +52,6 @@ export interface TaskSource {
 	countCompleted(): Promise<number>;
 	/** Get tasks in a specific parallel group */
 	getTasksInGroup?(group: number): Promise<Task[]>;
+	/** Get PRD-level defaults (engine/model/engine_args) if supported by this source */
+	getPrdDefaults?(): PrdDefaults | undefined;
 }

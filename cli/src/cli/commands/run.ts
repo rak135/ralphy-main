@@ -153,6 +153,7 @@ export async function runLoop(options: RuntimeOptions): Promise<void> {
 			skipMerge: options.skipMerge,
 			engineArgs: options.engineArgs,
 			syncIssue: options.syncIssue,
+			cliEngineName: options.aiEngine as import("../../engines/types.ts").AIEngineName,
 		});
 	} else {
 		result = await runSequential({
@@ -177,6 +178,7 @@ export async function runLoop(options: RuntimeOptions): Promise<void> {
 			skipMerge: options.skipMerge,
 			engineArgs: options.engineArgs,
 			syncIssue: options.syncIssue,
+			cliEngineName: options.aiEngine as import("../../engines/types.ts").AIEngineName,
 		});
 	}
 

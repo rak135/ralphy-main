@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import type { Task, TaskSource } from "./types.ts";
+import type { PrdDefaults, Task, TaskSource } from "./types.ts";
 
 interface JsonTask {
 	title: string;
@@ -8,11 +8,17 @@ interface JsonTask {
 	description?: string;
 	model?: string;
 	engine_args?: string[];
+	engine?: string;
 }
 
 interface JsonTaskFile {
 	name?: string;
 	description?: string;
+	defaults?: {
+		engine?: string;
+		model?: string;
+		engine_args?: string[];
+	};
 	tasks: JsonTask[];
 }
 
@@ -67,6 +73,7 @@ export class JsonTaskSource implements TaskSource {
 				completed: false,
 				model: task.model,
 				engineArgs: task.engine_args,
+				engine: task.engine,
 			}));
 	}
 
@@ -115,6 +122,7 @@ export class JsonTaskSource implements TaskSource {
 				completed: false,
 				model: task.model,
 				engineArgs: task.engine_args,
+				engine: task.engine,
 			}));
 	}
 
@@ -122,5 +130,15 @@ export class JsonTaskSource implements TaskSource {
 		const data = this.readFile();
 		const task = data.tasks?.find((item) => item.title === title);
 		return task?.parallel_group || 0;
+	}
+
+	getPrdDefaults(): PrdDefaults | undefined {
+		const data = this.readFile();
+		if (!data.defaults) return undefined;
+		return {
+			engine: data.defaults.engine,
+			model: data.defaults.model,
+			engineArgs: data.defaults.engine_args,
+		};
 	}
 }

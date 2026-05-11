@@ -1,6 +1,6 @@
 import { logError } from "../ui/logger.ts";
 import { JsonTaskSource } from "./json.ts";
-import type { Task, TaskSource, TaskSourceType } from "./types.ts";
+import type { PrdDefaults, Task, TaskSource, TaskSourceType } from "./types.ts";
 import { YamlTaskSource } from "./yaml.ts";
 
 interface CachedTaskSourceOptions {
@@ -121,6 +121,14 @@ export class CachedTaskSource implements TaskSource {
 			return this.inner.getParallelGroup(title);
 		}
 		return 0;
+	}
+
+	/**
+	 * Get PRD-level defaults (engine/model/engine_args) from the inner source.
+	 */
+	getPrdDefaults(): PrdDefaults | undefined {
+		const inner = this.inner as TaskSource & { getPrdDefaults?: () => PrdDefaults | undefined };
+		return inner.getPrdDefaults?.();
 	}
 
 	/**

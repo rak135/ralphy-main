@@ -3,7 +3,8 @@ import { join } from "node:path";
 import simpleGit from "simple-git";
 import { PROGRESS_FILE, RALPHY_DIR } from "../config/loader.ts";
 import { logTaskProgress } from "../config/writer.ts";
-import type { AIEngine, AIResult } from "../engines/types.ts";
+import { createEngine } from "../engines/index.ts";
+import type { AIEngine, AIEngineName, AIResult } from "../engines/types.ts";
 import { getCurrentBranch, returnToBaseBranch } from "../git/branch.ts";
 import { syncPrdToIssue } from "../git/issue-sync.ts";
 import {
@@ -19,13 +20,14 @@ import {
 	createAgentWorktree,
 	getWorktreeBase,
 } from "../git/worktree.ts";
-import type { Task, TaskSource } from "../tasks/types.ts";
+import type { PrdDefaults, Task, TaskSource } from "../tasks/types.ts";
 import { formatDuration, logDebug, logError, logInfo, logSuccess, logWarn } from "../ui/logger.ts";
 import { notifyTaskComplete, notifyTaskFailed } from "../ui/notify.ts";
 import { isCancellationError, isCancellationRequested } from "./cancel.ts";
 import { resolveConflictsWithAI } from "./conflict-resolution.ts";
 import { clearDeferredTask, recordDeferredTask } from "./deferred.ts";
 import { resolveEngineOptions } from "./engine-options.ts";
+import { resolveEffectiveExecution } from "./engine-resolution.ts";
 import { buildParallelPrompt } from "./prompt.ts";
 import { isRetryableError, withRetry } from "./retry.ts";
 import { commitSandboxChanges } from "./sandbox-git.ts";
@@ -289,7 +291,37 @@ export async function runParallel(
 		useSandbox = false,
 		engineArgs,
 		syncIssue,
+		cliEngineName,
+		engineFactory,
 	} = options;
+
+	// PRD-level defaults (only available for JSON/YAML sources)
+	const prdSourceTyped = taskSource as TaskSource & {
+		getPrdDefaults?: () => PrdDefaults | undefined;
+	};
+	const prdDefaults = cliEngineName ? prdSourceTyped.getPrdDefaults?.() : undefined;
+
+	/** Resolve engine + options per task, falling back to the CLI engine when not provided */
+	function resolveForTask(task: Task): {
+		taskEngine: AIEngine;
+		taskModelOverride: string | undefined;
+		taskEngineArgs: string[] | undefined;
+	} {
+		if (!cliEngineName) {
+			return { taskEngine: engine, taskModelOverride: modelOverride, taskEngineArgs: engineArgs };
+		}
+		const resolved = resolveEffectiveExecution(task, prdDefaults, {
+			engineName: cliEngineName,
+			modelOverride,
+			engineArgs,
+		});
+		const factory = engineFactory ?? ((name: string) => createEngine(name as AIEngineName));
+		return {
+			taskEngine: factory(resolved.engineName),
+			taskModelOverride: resolved.engineOptions.modelOverride,
+			taskEngineArgs: resolved.engineOptions.engineArgs,
+		};
+	}
 
 	const shouldFallbackToSandbox = (error: string | undefined): boolean => {
 		if (!error) return false;
@@ -403,10 +435,18 @@ export async function runParallel(
 		// Run agents in parallel (using sandbox or worktree mode)
 		const promises = batch.map((task) => {
 			globalAgentNum++;
+			const { taskEngine, taskModelOverride, taskEngineArgs } = resolveForTask(task);
+			if (cliEngineName) {
+				logInfo(
+					`    Engine: ${taskEngine.name}${
+						taskModelOverride ? `, Model: ${taskModelOverride}` : ""
+					}`,
+				);
+			}
 
 			const runInSandbox = () =>
 				runAgentInSandbox(
-					engine,
+					taskEngine,
 					task,
 					globalAgentNum,
 					getSandboxBase(workDir),
@@ -419,8 +459,8 @@ export async function runParallel(
 					skipTests,
 					skipLint,
 					browserEnabled,
-					modelOverride,
-					engineArgs,
+					taskModelOverride,
+					taskEngineArgs,
 				);
 
 			if (effectiveUseSandbox) {
@@ -428,7 +468,7 @@ export async function runParallel(
 			}
 
 			return runAgentInWorktree(
-				engine,
+				taskEngine,
 				task,
 				globalAgentNum,
 				baseBranch,
@@ -442,8 +482,8 @@ export async function runParallel(
 				skipTests,
 				skipLint,
 				browserEnabled,
-				modelOverride,
-				engineArgs,
+				taskModelOverride,
+				taskEngineArgs,
 			).then((res) => {
 				if (shouldFallbackToSandbox(res.error)) {
 					logWarn(`Agent ${globalAgentNum}: Worktree unavailable, retrying in sandbox mode.`);

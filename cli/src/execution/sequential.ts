@@ -1,18 +1,20 @@
 import { chmodSync, existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { flushAllProgressWrites, logTaskProgress } from "../config/writer.ts";
-import type { AIEngine, AIResult } from "../engines/types.ts";
+import { createEngine } from "../engines/index.ts";
+import type { AIEngine, AIEngineName, AIResult } from "../engines/types.ts";
 import { createTaskBranch, returnToBaseBranch } from "../git/branch.ts";
 import { commitCompletedTask } from "../git/commit.ts";
 import { syncPrdToIssue } from "../git/issue-sync.ts";
 import { createPullRequest } from "../git/pr.ts";
-import type { Task, TaskSource } from "../tasks/types.ts";
+import type { PrdDefaults, Task, TaskSource } from "../tasks/types.ts";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "../ui/logger.ts";
 import { notifyTaskComplete, notifyTaskFailed } from "../ui/notify.ts";
 import { ProgressSpinner } from "../ui/spinner.ts";
 import { isCancellationError } from "./cancel.ts";
 import { clearDeferredTask, recordDeferredTask } from "./deferred.ts";
 import { resolveEngineOptions } from "./engine-options.ts";
+import { resolveEffectiveExecution } from "./engine-resolution.ts";
 import { buildPrompt } from "./prompt.ts";
 import { isFatalError, isRetryableError, sleep, withRetry } from "./retry.ts";
 
@@ -123,6 +125,10 @@ export interface ExecutionOptions {
 	engineArgs?: string[];
 	/** GitHub issue number to sync PRD with on each iteration */
 	syncIssue?: number;
+	/** CLI-selected engine name; enables per-task engine resolution when provided */
+	cliEngineName?: AIEngineName;
+	/** Optional factory to create engines by name (overridable for testing) */
+	engineFactory?: (name: string) => AIEngine;
 }
 
 export interface ExecutionResult {
@@ -156,7 +162,16 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 		modelOverride,
 		engineArgs,
 		syncIssue,
+		cliEngineName,
+		engineFactory,
 	} = options;
+
+	// PRD-level defaults (only available for JSON/YAML sources)
+	const prdSource = taskSource as TaskSource & { getPrdDefaults?: () => PrdDefaults | undefined };
+	const prdDefaults = prdSource.getPrdDefaults?.();
+
+	// Engine availability cache — avoids repeated CLI availability checks per run
+	const engineAvailCache = new Map<string, boolean>();
 
 	const result: ExecutionResult = {
 		tasksCompleted: 0,
@@ -185,6 +200,47 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 		iteration++;
 		const remaining = await taskSource.countRemaining();
 		logInfo(`Task ${iteration}: ${task.title} (${remaining} remaining)`);
+
+		// Resolve per-task engine when cliEngineName is available
+		let taskEngine: AIEngine;
+		let taskEngineOptions: import("../engines/types.ts").EngineOptions;
+
+		if (cliEngineName) {
+			const resolved = resolveEffectiveExecution(task, prdDefaults, {
+				engineName: cliEngineName,
+				modelOverride,
+				engineArgs,
+			});
+			const factory = engineFactory ?? ((name: string) => createEngine(name as AIEngineName));
+			taskEngine = factory(resolved.engineName);
+			taskEngineOptions = resolved.engineOptions;
+
+			logInfo(`  Engine: ${taskEngine.name}`);
+			if (resolved.engineOptions.modelOverride) {
+				logInfo(`  Model: ${resolved.engineOptions.modelOverride}`);
+			}
+
+			// Check availability (cached)
+			if (!engineAvailCache.has(resolved.engineName)) {
+				const avail = await taskEngine.isAvailable();
+				engineAvailCache.set(resolved.engineName, avail);
+			}
+			if (!engineAvailCache.get(resolved.engineName)) {
+				logError(
+					`Engine "${resolved.engineName}" CLI not found for task "${task.title}". Skipping.`,
+				);
+				// Treat as non-retryable failure
+				logTaskProgress(task.title, "failed", workDir);
+				result.tasksFailed++;
+				notifyTaskFailed(task.title, `Engine "${resolved.engineName}" not available`);
+				await markTaskCompleteAndFlush(taskSource, task, workDir, options.prdFile);
+				continue;
+			}
+		} else {
+			// Backward compat: use the engine object passed directly
+			taskEngine = engine;
+			taskEngineOptions = resolveEngineOptions(task, { modelOverride, engineArgs });
+		}
 
 		// Create branch if needed
 		let branch: string | null = null;
@@ -223,19 +279,18 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 						spinner.updateStep("Working");
 
 						// Use streaming if available
-						const engineOptions = resolveEngineOptions(task, { modelOverride, engineArgs });
-						if (engine.executeStreaming) {
-							return await engine.executeStreaming(
+						if (taskEngine.executeStreaming) {
+							return await taskEngine.executeStreaming(
 								prompt,
 								workDir,
 								(step) => {
 									spinner.updateStep(step);
 								},
-								engineOptions,
+								taskEngineOptions,
 							);
 						}
 
-						const res = await engine.execute(prompt, workDir, engineOptions);
+						const res = await taskEngine.execute(prompt, workDir, taskEngineOptions);
 
 						if (!res.success && res.error && isRetryableError(res.error)) {
 							throw new Error(res.error);

@@ -174,3 +174,104 @@ describe("runSequential deterministic commits", () => {
 		expect(status.files.length).toBeGreaterThan(0);
 	});
 });
+
+describe("runSequential per-task engine resolution", () => {
+	let workDir: string | null = null;
+
+	afterEach(() => {
+		if (workDir && existsSync(workDir)) {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses engineFactory to create task-specific engine when cliEngineName is set", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+
+		// Write a PRD with a task that overrides the engine
+		writeFileSync(
+			fixture.prdPath,
+			JSON.stringify(
+				{
+					tasks: [{ title: "Engine override task", completed: false, engine: "opencode" }],
+				},
+				null,
+				2,
+			),
+			"utf-8",
+		);
+
+		const createdEngineNames: string[] = [];
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runSequential({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (name) => {
+				createdEngineNames.push(name);
+				return createSuccessfulEngine();
+			},
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.tasksCompleted).toBe(1);
+		expect(createdEngineNames).toContain("opencode");
+	});
+
+	it("falls back to passed engine when cliEngineName is not set", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+
+		let executeCalled = false;
+		const fallbackEngine = {
+			...createSuccessfulEngine(),
+			execute: async (_p: string, _w: string) => {
+				executeCalled = true;
+				return { success: true, response: "done", inputTokens: 0, outputTokens: 0 };
+			},
+		};
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runSequential({
+			engine: fallbackEngine,
+			// cliEngineName intentionally omitted
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.tasksCompleted).toBe(1);
+		expect(executeCalled).toBe(true);
+	});
+});

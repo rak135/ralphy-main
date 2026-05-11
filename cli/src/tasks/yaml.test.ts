@@ -65,4 +65,77 @@ tasks:
 		expect(tasks[0].model).toBeUndefined();
 		expect(tasks[0].engineArgs).toBeUndefined();
 	});
+
+	it("preserves task.engine from getAllTasks", async () => {
+		const filePath = writeTempYaml(`
+tasks:
+  - title: task-with-engine
+    completed: false
+    engine: copilot
+`);
+
+		const source = new YamlTaskSource(filePath);
+		const tasks = await source.getAllTasks();
+
+		expect(tasks[0].engine).toBe("copilot");
+	});
+
+	it("preserves task.engine from getTasksInGroup", async () => {
+		const filePath = writeTempYaml(`
+tasks:
+  - title: group-engine-task
+    completed: false
+    parallel_group: 1
+    engine: opencode
+`);
+
+		const source = new YamlTaskSource(filePath);
+		const tasks = await source.getTasksInGroup(1);
+
+		expect(tasks[0].engine).toBe("opencode");
+	});
+
+	it("returns undefined engine when not set on task", async () => {
+		const filePath = writeTempYaml(`
+tasks:
+  - title: no-engine
+    completed: false
+`);
+
+		const source = new YamlTaskSource(filePath);
+		const tasks = await source.getAllTasks();
+
+		expect(tasks[0].engine).toBeUndefined();
+	});
+
+	it("preserves defaults.engine, model, and engine_args via getPrdDefaults", () => {
+		const filePath = writeTempYaml(`
+defaults:
+  engine: opencode
+  model: openai/gpt-5.5-mini
+  engine_args:
+    - --variant
+    - low
+tasks:
+  - title: t1
+    completed: false
+`);
+
+		const source = new YamlTaskSource(filePath);
+		const defaults = source.getPrdDefaults();
+
+		expect(defaults?.engine).toBe("opencode");
+		expect(defaults?.model).toBe("openai/gpt-5.5-mini");
+		expect(defaults?.engineArgs).toEqual(["--variant", "low"]);
+	});
+
+	it("returns undefined from getPrdDefaults when no defaults block", () => {
+		const filePath = writeTempYaml(`
+tasks:
+  - title: t1
+    completed: false
+`);
+		const source = new YamlTaskSource(filePath);
+		expect(source.getPrdDefaults()).toBeUndefined();
+	});
 });
