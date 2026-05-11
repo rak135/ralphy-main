@@ -9,6 +9,34 @@ const STATUS_LABEL: Record<TaskExecutionRecord["status"], string> = {
 };
 
 /**
+ * Format engine args for display.
+ * Returns "(none)" when no args are set.
+ */
+export function formatEngineArgs(args?: string[]): string {
+	return args && args.length > 0 ? args.join(" ") : "(none)";
+}
+
+/**
+ * Log resolved routing for a task before execution starts.
+ *
+ * Example output:
+ *   Engine: OpenCode
+ *   Model: deepseek/deepseek-v4-pro
+ *   Engine args: --variant high
+ */
+export function logResolvedTaskRouting(params: {
+	engineName: string;
+	model?: string;
+	engineArgs?: string[];
+}): void {
+	logInfo(`  Engine: ${params.engineName}`);
+	if (params.model) {
+		logInfo(`  Model: ${params.model}`);
+	}
+	logInfo(`  Engine args: ${formatEngineArgs(params.engineArgs)}`);
+}
+
+/**
  * Print a structured routing summary for a single task execution.
  *
  * Example output:
@@ -20,7 +48,7 @@ const STATUS_LABEL: Record<TaskExecutionRecord["status"], string> = {
 export function logTaskExecutionRecord(record: TaskExecutionRecord): void {
 	const label = STATUS_LABEL[record.status];
 	const modelStr = record.model ?? "engine default";
-	const argsStr = record.engineArgs.length > 0 ? record.engineArgs.join(" ") : "(none)";
+	const argsStr = formatEngineArgs(record.engineArgs);
 
 	logInfo(`[${label}] ${record.taskTitle}`);
 	logInfo(`  Engine:      ${record.engineName}`);

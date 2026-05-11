@@ -340,4 +340,90 @@ describe("runParallel taskExecutions records", () => {
 		expect(result.taskExecutions).toHaveLength(1);
 		expect(result.taskExecutions[0].model).toBe("claude-opus-4-5");
 	});
+
+	it("records inherited PRD default engineArgs in sandbox record", async () => {
+		const fixture = await createRepoFixture({
+			defaults: { engine: "claude", engine_args: ["--variant", "high"] },
+			tasks: [{ title: "PRD default args task", completed: false }],
+		});
+		workDir = fixture.workDir;
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runParallel({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(_name),
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+			maxParallel: 2,
+			prdSource: "json",
+			useSandbox: true,
+			skipMerge: true,
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].engineArgs).toEqual(["--variant", "high"]);
+	});
+
+	it("records task-level engineArgs override in sandbox record", async () => {
+		const fixture = await createRepoFixture({
+			defaults: { engine: "claude", engine_args: ["--prd-arg"] },
+			tasks: [
+				{
+					title: "Task arg override",
+					completed: false,
+					engine_args: ["-c", 'model_reasoning_effort="high"'],
+				},
+			],
+		});
+		workDir = fixture.workDir;
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runParallel({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(_name),
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+			maxParallel: 2,
+			prdSource: "json",
+			useSandbox: true,
+			skipMerge: true,
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].engineArgs).toEqual(["-c", 'model_reasoning_effort="high"']);
+	});
 });

@@ -17,7 +17,7 @@ import { resolveEngineOptions } from "./engine-options.ts";
 import { resolveEffectiveExecution } from "./engine-resolution.ts";
 import { buildPrompt } from "./prompt.ts";
 import { isFatalError, isRetryableError, sleep, withRetry } from "./retry.ts";
-import { logTaskExecutionRecord } from "./task-execution-logging.ts";
+import { logResolvedTaskRouting, logTaskExecutionRecord } from "./task-execution-logging.ts";
 import type { TaskExecutionRecord } from "./task-execution-record.ts";
 
 function getStateFilePaths(workDir: string, prdFile?: string): string[] {
@@ -221,10 +221,11 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 			taskEngineOptions = resolved.engineOptions;
 			resolvedEngineName = resolved.engineName;
 
-			logInfo(`  Engine: ${taskEngine.name}`);
-			if (resolved.engineOptions.modelOverride) {
-				logInfo(`  Model: ${resolved.engineOptions.modelOverride}`);
-			}
+			logResolvedTaskRouting({
+				engineName: taskEngine.name,
+				model: resolved.engineOptions.modelOverride,
+				engineArgs: resolved.engineOptions.engineArgs,
+			});
 
 			// Check availability (cached)
 			if (!engineAvailCache.has(resolved.engineName)) {

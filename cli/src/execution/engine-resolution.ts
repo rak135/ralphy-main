@@ -18,6 +18,75 @@ export interface EffectiveExecution {
 }
 
 /**
+ * Summary of effective engine routing for startup display.
+ * Computed from PRD defaults, CLI options, and all tasks.
+ */
+export interface StartupRoutingSummary {
+	/** Resolved default engine name (prdDefaults.engine ?? cliEngineName) */
+	defaultEngineName: string;
+	/** Resolved default model (prdDefaults.model ?? cliModelOverride) */
+	defaultModel: string | undefined;
+	/** Resolved default engine args (prdDefaults.engineArgs ?? cliEngineArgs) */
+	defaultEngineArgs: string[] | undefined;
+	/** Whether any task explicitly sets a different engine */
+	hasTaskEngineOverrides: boolean;
+	/** Whether any task explicitly sets a different model */
+	hasTaskModelOverrides: boolean;
+	/** Whether any task explicitly sets different engine args */
+	hasTaskEngineArgsOverrides: boolean;
+	/** Distinct engine names used across all tasks after full resolution */
+	distinctEngines: string[];
+}
+
+export function resolveStartupRoutingSummary(params: {
+	prdDefaults: PrdDefaults | undefined;
+	cliEngineName: AIEngineName;
+	cliModelOverride: string | undefined;
+	cliEngineArgs: string[] | undefined;
+	tasks: Task[];
+}): StartupRoutingSummary {
+	const { prdDefaults, cliEngineName, cliModelOverride, cliEngineArgs, tasks } = params;
+
+	const defaultEngineName = prdDefaults?.engine ?? cliEngineName;
+	const defaultModel = prdDefaults?.model ?? cliModelOverride;
+
+	const cliArgsEffective =
+		defaultEngineName === cliEngineName && cliEngineArgs?.length ? cliEngineArgs : undefined;
+	const defaultEngineArgs = prdDefaults?.engineArgs?.length
+		? prdDefaults.engineArgs
+		: cliArgsEffective;
+
+	let hasTaskEngineOverrides = false;
+	let hasTaskModelOverrides = false;
+	let hasTaskEngineArgsOverrides = false;
+	const distinctEngines = new Set<string>();
+	distinctEngines.add(defaultEngineName);
+
+	for (const task of tasks) {
+		if (task.engine !== undefined && task.engine !== defaultEngineName) {
+			hasTaskEngineOverrides = true;
+		}
+		if (task.model !== undefined) {
+			hasTaskModelOverrides = true;
+		}
+		if (task.engineArgs !== undefined) {
+			hasTaskEngineArgsOverrides = true;
+		}
+		distinctEngines.add(task.engine ?? defaultEngineName);
+	}
+
+	return {
+		defaultEngineName,
+		defaultModel,
+		defaultEngineArgs,
+		hasTaskEngineOverrides,
+		hasTaskModelOverrides,
+		hasTaskEngineArgsOverrides,
+		distinctEngines: [...distinctEngines],
+	};
+}
+
+/**
  * Resolve the effective engine name and engine options for a single task.
  *
  * Resolution order:

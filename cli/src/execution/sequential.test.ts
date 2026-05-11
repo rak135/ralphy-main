@@ -1,11 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import type { Mock } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import simpleGit from "simple-git";
-import type { AIEngine } from "../engines/types.ts";
+import type { AIEngine, EngineOptions } from "../engines/types.ts";
 import { CachedTaskSource } from "../tasks/index.ts";
 import { JsonTaskSource } from "../tasks/json.ts";
+import * as loggerModule from "../ui/logger.ts";
 import { runSequential } from "./sequential.ts";
 
 function createSuccessfulEngine(fileName = "implementation.txt"): AIEngine {
@@ -232,6 +234,57 @@ describe("runSequential per-task engine resolution", () => {
 
 		expect(result.tasksCompleted).toBe(1);
 		expect(createdEngineNames).toContain("opencode");
+	});
+
+	it("uses PRD defaults engine when task has no engine override", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+
+		writeFileSync(
+			fixture.prdPath,
+			JSON.stringify(
+				{
+					defaults: { engine: "opencode", model: "deepseek-v4" },
+					tasks: [{ title: "PRD default task", completed: false }],
+				},
+				null,
+				2,
+			),
+			"utf-8",
+		);
+
+		const createdEngineNames: string[] = [];
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runSequential({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (name) => {
+				createdEngineNames.push(name);
+				return createSuccessfulEngine();
+			},
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.tasksCompleted).toBe(1);
+		expect(createdEngineNames).toContain("opencode");
+		expect(createdEngineNames).not.toContain("claude");
 	});
 
 	it("falls back to passed engine when cliEngineName is not set", async () => {
@@ -538,5 +591,213 @@ describe("runSequential taskExecutions records", () => {
 		expect(result.taskExecutions).toHaveLength(1);
 		expect(result.taskExecutions[0].status).toBe("failed");
 		expect(result.taskExecutions[0].error).toBe("Boom");
+	});
+});
+
+describe("runSequential pre-task routing log", () => {
+	let workDir: string | null = null;
+	let lines: string[];
+	let spy: Mock<typeof loggerModule.logInfo>;
+
+	beforeEach(() => {
+		workDir = null;
+		lines = [];
+		spy = spyOn(loggerModule, "logInfo").mockImplementation((msg: string) => {
+			lines.push(msg);
+		});
+	});
+
+	afterEach(() => {
+		spy.mockRestore();
+		if (workDir && existsSync(workDir)) {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
+	async function runWithPrd(prdContent: object): Promise<void> {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+		writeFileSync(fixture.prdPath, JSON.stringify(prdContent, null, 2), "utf-8");
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+		await runSequential({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(),
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+	}
+
+	it("logs inherited PRD default engine args before task execution", async () => {
+		await runWithPrd({
+			defaults: {
+				engine: "claude",
+				model: "deepseek/deepseek-v4-pro",
+				engine_args: ["--variant", "high"],
+			},
+			tasks: [{ title: "P0.3 Fix baseline", completed: false }],
+		});
+		expect(lines.some((l) => l === "  Engine args: --variant high")).toBe(true);
+	});
+
+	it("logs task-override engine args before task execution", async () => {
+		await runWithPrd({
+			tasks: [
+				{
+					title: "Codex override task",
+					completed: false,
+					engine: "claude",
+					engine_args: ["-c", 'model_reasoning_effort="high"'],
+				},
+			],
+		});
+		expect(lines.some((l) => l === '  Engine args: -c model_reasoning_effort="high"')).toBe(true);
+	});
+
+	it('logs "(none)" when no engine args are configured', async () => {
+		await runWithPrd({
+			tasks: [{ title: "No args task", completed: false }],
+		});
+		expect(lines.some((l) => l === "  Engine args: (none)")).toBe(true);
+	});
+
+	it("logs Engine and Model before Engine args", async () => {
+		await runWithPrd({
+			defaults: { engine: "claude", model: "deepseek/deepseek-v4-pro", engine_args: ["--fast"] },
+			tasks: [{ title: "Ordered log task", completed: false }],
+		});
+		const engineIdx = lines.findIndex((l) => l.startsWith("  Engine:"));
+		const modelIdx = lines.findIndex((l) => l.startsWith("  Model:"));
+		const argsIdx = lines.findIndex((l) => l.startsWith("  Engine args:"));
+		expect(engineIdx).toBeGreaterThanOrEqual(0);
+		expect(modelIdx).toBeGreaterThan(engineIdx);
+		expect(argsIdx).toBeGreaterThan(modelIdx);
+	});
+});
+
+describe("runSequential engine args propagation to execute", () => {
+	let workDir: string | null = null;
+
+	afterEach(() => {
+		if (workDir && existsSync(workDir)) {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
+	it("passes inherited PRD default engineArgs to engine.execute", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+		writeFileSync(
+			fixture.prdPath,
+			JSON.stringify(
+				{
+					defaults: {
+						engine: "claude",
+						model: "deepseek/deepseek-v4-pro",
+						engine_args: ["--variant", "high"],
+					},
+					tasks: [{ title: "Propagation task", completed: false }],
+				},
+				null,
+				2,
+			),
+			"utf-8",
+		);
+
+		let capturedOptions: EngineOptions | undefined;
+		const capturingEngine: AIEngine = {
+			name: "claude",
+			cliCommand: "claude",
+			isAvailable: async () => true,
+			execute: async (_prompt, _workDir, options) => {
+				capturedOptions = options;
+				return { success: true, response: "done", inputTokens: 0, outputTokens: 0 };
+			},
+		};
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+		await runSequential({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => capturingEngine,
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(capturedOptions?.engineArgs).toEqual(["--variant", "high"]);
+	});
+
+	it("completion record engineArgs matches inherited PRD default engineArgs", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+		writeFileSync(
+			fixture.prdPath,
+			JSON.stringify(
+				{
+					defaults: { engine: "claude", engine_args: ["--variant", "high"] },
+					tasks: [{ title: "Record consistency task", completed: false }],
+				},
+				null,
+				2,
+			),
+			"utf-8",
+		);
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+		const result = await runSequential({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(),
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].engineArgs).toEqual(["--variant", "high"]);
 	});
 });

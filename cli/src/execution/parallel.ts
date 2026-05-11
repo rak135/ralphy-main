@@ -33,7 +33,7 @@ import { isRetryableError, withRetry } from "./retry.ts";
 import { commitSandboxChanges } from "./sandbox-git.ts";
 import { cleanupSandbox, createSandbox, getModifiedFiles, getSandboxBase } from "./sandbox.ts";
 import type { ExecutionOptions, ExecutionResult } from "./sequential.ts";
-import { logTaskExecutionRecord } from "./task-execution-logging.ts";
+import { logResolvedTaskRouting, logTaskExecutionRecord } from "./task-execution-logging.ts";
 import type { TaskExecutionRecord } from "./task-execution-record.ts";
 
 interface ParallelAgentResult {
@@ -500,11 +500,11 @@ export async function runParallel(
 			const { taskEngine, taskModelOverride, taskEngineArgs, taskEngineName } =
 				resolveForTask(task);
 			if (cliEngineName) {
-				logInfo(
-					`    Engine: ${taskEngine.name}${
-						taskModelOverride ? `, Model: ${taskModelOverride}` : ""
-					}`,
-				);
+				logResolvedTaskRouting({
+					engineName: taskEngine.name,
+					model: taskModelOverride,
+					engineArgs: taskEngineArgs,
+				});
 			}
 
 			const runInSandbox = () =>

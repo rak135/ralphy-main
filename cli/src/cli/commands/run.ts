@@ -1,15 +1,17 @@
 import { existsSync } from "node:fs";
 import { loadConfig } from "../../config/loader.ts";
 import type { RuntimeOptions } from "../../config/types.ts";
-import { createEngine, isEngineAvailable } from "../../engines/index.ts";
+import { createEngine, getEngineName } from "../../engines/index.ts";
 import type { AIEngineName } from "../../engines/types.ts";
 import { isBrowserAvailable } from "../../execution/browser.ts";
 import { installCancellationHandlers, isCancellationRequested } from "../../execution/cancel.ts";
+import { resolveStartupRoutingSummary } from "../../execution/engine-resolution.ts";
 import { runParallel } from "../../execution/parallel.ts";
 import { type ExecutionResult, runSequential } from "../../execution/sequential.ts";
 import { getDefaultBaseBranch } from "../../git/branch.ts";
 import { sendNotifications } from "../../notifications/webhook.ts";
 import { CachedTaskSource, createTaskSource } from "../../tasks/index.ts";
+import type { PrdDefaults } from "../../tasks/types.ts";
 import {
 	formatDuration,
 	formatTokens,
@@ -56,15 +58,6 @@ export async function runLoop(options: RuntimeOptions): Promise<void> {
 		process.exit(1);
 	}
 
-	// Check engine availability
-	const engine = createEngine(options.aiEngine as AIEngineName);
-	const available = await isEngineAvailable(options.aiEngine as AIEngineName);
-
-	if (!available) {
-		logError(`${engine.name} CLI not found. Make sure '${engine.cliCommand}' is in your PATH.`);
-		process.exit(1);
-	}
-
 	// Create task source with caching for better performance
 	// Caching reduces file I/O by loading tasks once and batching writes
 	const innerTaskSource = createTaskSource({
@@ -75,11 +68,42 @@ export async function runLoop(options: RuntimeOptions): Promise<void> {
 	});
 	const taskSource = new CachedTaskSource(innerTaskSource);
 
-	// Check if there are tasks
-	const remaining = await taskSource.countRemaining();
+	// Read PRD-level defaults (only available for JSON/YAML sources)
+	const prdDefaults =
+		(innerTaskSource as { getPrdDefaults?: () => PrdDefaults | undefined }).getPrdDefaults?.() ??
+		undefined;
+
+	// Read all tasks for routing summary and remaining count
+	const allTasks = await taskSource.getAllTasks();
+	const remaining = allTasks.length;
 	if (remaining === 0) {
 		logSuccess("No tasks remaining. All done!");
 		return;
+	}
+
+	// Compute startup routing summary
+	const routingSummary = resolveStartupRoutingSummary({
+		prdDefaults,
+		cliEngineName: options.aiEngine as AIEngineName,
+		cliModelOverride: options.modelOverride,
+		cliEngineArgs: options.engineArgs,
+		tasks: allTasks,
+	});
+
+	// Check availability of the effective default engine
+	const effectiveDefaultEngineName = routingSummary.defaultEngineName as AIEngineName;
+	let engine = createEngine(options.aiEngine as AIEngineName);
+	try {
+		engine = createEngine(effectiveDefaultEngineName);
+	} catch {
+		logError(`Unknown engine: ${effectiveDefaultEngineName}`);
+		process.exit(1);
+	}
+
+	const available = await engine.isAvailable();
+	if (!available) {
+		logError(`${engine.name} CLI not found. Make sure '${engine.cliCommand}' is in your PATH.`);
+		process.exit(1);
 	}
 
 	// Get base branch if needed
@@ -96,7 +120,27 @@ export async function runLoop(options: RuntimeOptions): Promise<void> {
 		}
 	}
 
-	logInfo(`Starting Ralphy with ${engine.name}`);
+	// Startup banner using resolved defaults
+	logInfo("Starting Ralphy");
+	logInfo(`Default engine: ${engine.name}`);
+	if (routingSummary.defaultModel) {
+		logInfo(`Default model: ${routingSummary.defaultModel}`);
+	}
+	if (routingSummary.defaultEngineArgs?.length) {
+		logInfo(`Default engine args: ${routingSummary.defaultEngineArgs.join(" ")}`);
+	}
+	if (routingSummary.distinctEngines.length > 1) {
+		const engineLabels = routingSummary.distinctEngines.map((name) => {
+			try {
+				return getEngineName(name as AIEngineName);
+			} catch {
+				return name;
+			}
+		});
+		logInfo(`Task engines: ${engineLabels.join(", ")}`);
+	} else if (routingSummary.hasTaskEngineOverrides) {
+		logInfo("Note: some tasks override the default engine");
+	}
 	logInfo(`Tasks remaining: ${remaining}`);
 	if (options.parallel) {
 		logInfo(`Mode: Parallel (max ${options.maxParallel} agents)`);
