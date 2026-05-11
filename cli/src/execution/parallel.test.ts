@@ -209,3 +209,135 @@ describe("runParallel per-task engine resolution (sandbox mode)", () => {
 		expect(createdEngineNames).not.toContain("claude");
 	});
 });
+
+describe("runParallel taskExecutions records", () => {
+	let workDir: string | null = null;
+
+	beforeEach(() => {
+		workDir = null;
+	});
+
+	afterEach(() => {
+		if (workDir && existsSync(workDir)) {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
+	it("produces one record per completed task in sandbox mode", async () => {
+		const fixture = await createRepoFixture({
+			tasks: [{ title: "Task A", completed: false }],
+		});
+		workDir = fixture.workDir;
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runParallel({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(_name),
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+			maxParallel: 2,
+			prdSource: "json",
+			useSandbox: true,
+			skipMerge: true,
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].status).toBe("completed");
+	});
+
+	it("records task-specific engineName in sandbox record", async () => {
+		const fixture = await createRepoFixture({
+			tasks: [{ title: "Engine override task", completed: false, engine: "opencode" }],
+		});
+		workDir = fixture.workDir;
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runParallel({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (name) => createSuccessfulEngine(name),
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+			maxParallel: 2,
+			prdSource: "json",
+			useSandbox: true,
+			skipMerge: true,
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].engineName).toBe("opencode");
+	});
+
+	it("records resolved model in sandbox record", async () => {
+		const fixture = await createRepoFixture({
+			tasks: [{ title: "Model task", completed: false }],
+		});
+		workDir = fixture.workDir;
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runParallel({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(),
+			modelOverride: "claude-opus-4-5",
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+			maxParallel: 2,
+			prdSource: "json",
+			useSandbox: true,
+			skipMerge: true,
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].model).toBe("claude-opus-4-5");
+	});
+});

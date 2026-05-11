@@ -275,3 +275,268 @@ describe("runSequential per-task engine resolution", () => {
 		expect(executeCalled).toBe(true);
 	});
 });
+
+describe("runSequential taskExecutions records", () => {
+	let workDir: string | null = null;
+
+	beforeEach(() => {
+		workDir = null;
+	});
+
+	afterEach(() => {
+		if (workDir && existsSync(workDir)) {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
+	it("records one completed record per executed task", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runSequential({
+			engine: createSuccessfulEngine(),
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].status).toBe("completed");
+		expect(result.taskExecutions[0].taskTitle).toBe("Implement deterministic commit");
+	});
+
+	it("records effective engine name from cliEngineName + task override", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+
+		// Write a PRD with a task that explicitly overrides the engine
+		writeFileSync(
+			fixture.prdPath,
+			JSON.stringify(
+				{ tasks: [{ title: "Engine task", completed: false, engine: "opencode" }] },
+				null,
+				2,
+			),
+			"utf-8",
+		);
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runSequential({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(),
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].engineName).toBe("opencode");
+	});
+
+	it("records inherited CLI model as effective model in the record", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runSequential({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(),
+			modelOverride: "claude-opus-4-5",
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].model).toBe("claude-opus-4-5");
+	});
+
+	it("records undefined model (engine default) when no model is configured", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runSequential({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(),
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].model).toBeUndefined();
+	});
+
+	it("records empty engineArgs when none configured", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runSequential({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(),
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].engineArgs).toEqual([]);
+	});
+
+	it("records resolved engineArgs when set via CLI", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runSequential({
+			engine: createSuccessfulEngine(),
+			cliEngineName: "claude",
+			engineFactory: (_name) => createSuccessfulEngine(),
+			engineArgs: ["--fast"],
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].engineArgs).toEqual(["--fast"]);
+	});
+
+	it("records failed task with status=failed and error field", async () => {
+		const fixture = await createRepoFixture();
+		workDir = fixture.workDir;
+
+		const failingEngine: AIEngine = {
+			name: "Failing Engine",
+			cliCommand: "failing",
+			isAvailable: async () => true,
+			execute: async () => ({ success: false, error: "Boom", inputTokens: 0, outputTokens: 0 }),
+		};
+
+		const taskSource = new CachedTaskSource(new JsonTaskSource(fixture.prdPath), {
+			flushIntervalMs: 0,
+		});
+
+		const result = await runSequential({
+			engine: failingEngine,
+			cliEngineName: "claude",
+			engineFactory: (_name) => failingEngine,
+			taskSource,
+			workDir: fixture.workDir,
+			skipTests: true,
+			skipLint: true,
+			dryRun: false,
+			maxIterations: 1,
+			maxRetries: 1,
+			retryDelay: 0,
+			branchPerTask: false,
+			baseBranch: "",
+			createPr: false,
+			draftPr: false,
+			autoCommit: false,
+			browserEnabled: "false",
+			prdFile: "PRD.json",
+		});
+
+		expect(result.taskExecutions).toHaveLength(1);
+		expect(result.taskExecutions[0].status).toBe("failed");
+		expect(result.taskExecutions[0].error).toBe("Boom");
+	});
+});

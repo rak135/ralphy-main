@@ -163,6 +163,65 @@ ralphy --json PRD.json
 ```
 Titles must be unique.
 
+### Per-task engine, model, and engine args
+
+JSON and YAML task files support per-task and PRD-level engine selection.
+
+**PRD-level defaults** apply to all tasks that don't override individually:
+```json
+{
+  "defaults": {
+    "engine": "opencode",
+    "model": "openai/gpt-5.5-mini",
+    "engine_args": ["--fast"]
+  },
+  "tasks": [
+    { "title": "create auth", "completed": false }
+  ]
+}
+```
+
+**Per-task overrides** take precedence over PRD defaults and CLI flags:
+```json
+{
+  "tasks": [
+    {
+      "title": "create auth",
+      "completed": false,
+      "engine": "copilot",
+      "model": "claude-opus-4.5",
+      "engine_args": ["--allow-all-tools"]
+    }
+  ]
+}
+```
+
+Resolution order (highest priority first):
+1. `task.engine` / `task.model` / `task.engine_args`
+2. `defaults.engine` / `defaults.model` / `defaults.engine_args`
+3. CLI `--engine` / `--model` / `-- <engine-args>`
+
+CLI engine args are only forwarded when the effective engine matches the CLI-selected engine. PRD and task engine args always apply to their respective effective engine.
+
+### Execution routing output
+
+After each task finishes, ralphy prints the effective engine, model, and args used:
+
+```
+[Completed] create auth
+  Engine:      opencode
+  Model:       openai/gpt-5.5-mini
+  Engine args: --fast
+```
+
+When no model override is configured, the output shows `engine default`:
+```
+[Completed] add dashboard
+  Engine:      claude
+  Model:       engine default
+  Engine args: (none)
+```
+
 **GitHub Issues**:
 ```bash
 ralphy --github owner/repo

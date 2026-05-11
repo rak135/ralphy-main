@@ -17,6 +17,8 @@ import { resolveEngineOptions } from "./engine-options.ts";
 import { resolveEffectiveExecution } from "./engine-resolution.ts";
 import { buildPrompt } from "./prompt.ts";
 import { isFatalError, isRetryableError, sleep, withRetry } from "./retry.ts";
+import { logTaskExecutionRecord } from "./task-execution-logging.ts";
+import type { TaskExecutionRecord } from "./task-execution-record.ts";
 
 function getStateFilePaths(workDir: string, prdFile?: string): string[] {
 	const stateFiles = [prdFile, ".ralphy/config.yaml", ".ralphy/progress.txt"].filter(
@@ -136,6 +138,7 @@ export interface ExecutionResult {
 	tasksFailed: number;
 	totalInputTokens: number;
 	totalOutputTokens: number;
+	taskExecutions: TaskExecutionRecord[];
 }
 
 /**
@@ -178,6 +181,7 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 		tasksFailed: 0,
 		totalInputTokens: 0,
 		totalOutputTokens: 0,
+		taskExecutions: [],
 	};
 
 	let iteration = 0;
@@ -204,6 +208,7 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 		// Resolve per-task engine when cliEngineName is available
 		let taskEngine: AIEngine;
 		let taskEngineOptions: import("../engines/types.ts").EngineOptions;
+		let resolvedEngineName: string;
 
 		if (cliEngineName) {
 			const resolved = resolveEffectiveExecution(task, prdDefaults, {
@@ -214,6 +219,7 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 			const factory = engineFactory ?? ((name: string) => createEngine(name as AIEngineName));
 			taskEngine = factory(resolved.engineName);
 			taskEngineOptions = resolved.engineOptions;
+			resolvedEngineName = resolved.engineName;
 
 			logInfo(`  Engine: ${taskEngine.name}`);
 			if (resolved.engineOptions.modelOverride) {
@@ -230,6 +236,17 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 					`Engine "${resolved.engineName}" CLI not found for task "${task.title}". Skipping.`,
 				);
 				// Treat as non-retryable failure
+				const skipRecord: TaskExecutionRecord = {
+					taskId: task.id,
+					taskTitle: task.title,
+					status: "skipped",
+					engineName: resolved.engineName as AIEngineName,
+					model: resolved.engineOptions.modelOverride,
+					engineArgs: resolved.engineOptions.engineArgs ?? [],
+					error: `Engine "${resolved.engineName}" not available`,
+				};
+				result.taskExecutions.push(skipRecord);
+				logTaskExecutionRecord(skipRecord);
 				logTaskProgress(task.title, "failed", workDir);
 				result.tasksFailed++;
 				notifyTaskFailed(task.title, `Engine "${resolved.engineName}" not available`);
@@ -240,6 +257,7 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 			// Backward compat: use the engine object passed directly
 			taskEngine = engine;
 			taskEngineOptions = resolveEngineOptions(task, { modelOverride, engineArgs });
+			resolvedEngineName = engine.name;
 		}
 
 		// Create branch if needed
@@ -328,6 +346,19 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 
 					result.tasksCompleted++;
 
+					const completedRecord: TaskExecutionRecord = {
+						taskId: task.id,
+						taskTitle: task.title,
+						status: "completed",
+						engineName: resolvedEngineName as AIEngineName,
+						model: taskEngineOptions.modelOverride,
+						engineArgs: taskEngineOptions.engineArgs ?? [],
+						inputTokens: aiResult.inputTokens,
+						outputTokens: aiResult.outputTokens,
+					};
+					result.taskExecutions.push(completedRecord);
+					logTaskExecutionRecord(completedRecord);
+
 					// Sync PRD to GitHub issue if configured
 					if (syncIssue && options.prdFile) {
 						await syncPrdToIssue(options.prdFile, syncIssue, workDir);
@@ -363,10 +394,32 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 							notifyTaskFailed(task.title, errMsg);
 							await markTaskCompleteAndFlush(taskSource, task, workDir, options.prdFile);
 							clearDeferredTask(taskSource.type, task, workDir, options.prdFile);
+							const rec: TaskExecutionRecord = {
+								taskId: task.id,
+								taskTitle: task.title,
+								status: "failed",
+								engineName: resolvedEngineName as AIEngineName,
+								model: taskEngineOptions.modelOverride,
+								engineArgs: taskEngineOptions.engineArgs ?? [],
+								error: errMsg,
+							};
+							result.taskExecutions.push(rec);
+							logTaskExecutionRecord(rec);
 						} else {
 							logWarn(`Temporary failure, stopping early (${deferrals}/${maxRetries}): ${errMsg}`);
 							result.tasksFailed++;
 							abortDueToRetryableFailure = true;
+							const rec: TaskExecutionRecord = {
+								taskId: task.id,
+								taskTitle: task.title,
+								status: "deferred",
+								engineName: resolvedEngineName as AIEngineName,
+								model: taskEngineOptions.modelOverride,
+								engineArgs: taskEngineOptions.engineArgs ?? [],
+								error: errMsg,
+							};
+							result.taskExecutions.push(rec);
+							logTaskExecutionRecord(rec);
 						}
 					} else if (isFatalError(errMsg)) {
 						// Fatal error (auth, config) - abort all remaining tasks
@@ -375,6 +428,17 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 						logError("Aborting remaining tasks due to configuration/authentication issue.");
 						result.tasksFailed++;
 						notifyTaskFailed(task.title, errMsg);
+						const rec: TaskExecutionRecord = {
+							taskId: task.id,
+							taskTitle: task.title,
+							status: "failed",
+							engineName: resolvedEngineName as AIEngineName,
+							model: taskEngineOptions.modelOverride,
+							engineArgs: taskEngineOptions.engineArgs ?? [],
+							error: errMsg,
+						};
+						result.taskExecutions.push(rec);
+						logTaskExecutionRecord(rec);
 						return result; // Exit immediately
 					} else {
 						spinner.error(errMsg);
@@ -384,6 +448,17 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 						// Mark task complete so we don't retry it infinitely
 						await markTaskCompleteAndFlush(taskSource, task, workDir, options.prdFile);
 						clearDeferredTask(taskSource.type, task, workDir, options.prdFile);
+						const rec: TaskExecutionRecord = {
+							taskId: task.id,
+							taskTitle: task.title,
+							status: "failed",
+							engineName: resolvedEngineName as AIEngineName,
+							model: taskEngineOptions.modelOverride,
+							engineArgs: taskEngineOptions.engineArgs ?? [],
+							error: errMsg,
+						};
+						result.taskExecutions.push(rec);
+						logTaskExecutionRecord(rec);
 					}
 				}
 			} catch (error) {
@@ -405,10 +480,32 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 						notifyTaskFailed(task.title, errorMsg);
 						await markTaskCompleteAndFlush(taskSource, task, workDir, options.prdFile);
 						clearDeferredTask(taskSource.type, task, workDir, options.prdFile);
+						const rec: TaskExecutionRecord = {
+							taskId: task.id,
+							taskTitle: task.title,
+							status: "failed",
+							engineName: resolvedEngineName as AIEngineName,
+							model: taskEngineOptions.modelOverride,
+							engineArgs: taskEngineOptions.engineArgs ?? [],
+							error: errorMsg,
+						};
+						result.taskExecutions.push(rec);
+						logTaskExecutionRecord(rec);
 					} else {
 						logWarn(`Temporary failure, stopping early (${deferrals}/${maxRetries}): ${errorMsg}`);
 						result.tasksFailed++;
 						abortDueToRetryableFailure = true;
+						const rec: TaskExecutionRecord = {
+							taskId: task.id,
+							taskTitle: task.title,
+							status: "deferred",
+							engineName: resolvedEngineName as AIEngineName,
+							model: taskEngineOptions.modelOverride,
+							engineArgs: taskEngineOptions.engineArgs ?? [],
+							error: errorMsg,
+						};
+						result.taskExecutions.push(rec);
+						logTaskExecutionRecord(rec);
 					}
 				} else if (isFatalError(errorMsg)) {
 					// Fatal error (auth, config) - abort all remaining tasks
@@ -417,6 +514,17 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 					logError("Aborting remaining tasks due to configuration/authentication issue.");
 					result.tasksFailed++;
 					notifyTaskFailed(task.title, errorMsg);
+					const rec: TaskExecutionRecord = {
+						taskId: task.id,
+						taskTitle: task.title,
+						status: "failed",
+						engineName: resolvedEngineName as AIEngineName,
+						model: taskEngineOptions.modelOverride,
+						engineArgs: taskEngineOptions.engineArgs ?? [],
+						error: errorMsg,
+					};
+					result.taskExecutions.push(rec);
+					logTaskExecutionRecord(rec);
 					return result; // Exit immediately
 				} else {
 					spinner.error(errorMsg);
@@ -426,6 +534,17 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 					// Mark task complete so we don't retry it infinitely
 					await markTaskCompleteAndFlush(taskSource, task, workDir, options.prdFile);
 					clearDeferredTask(taskSource.type, task, workDir, options.prdFile);
+					const rec: TaskExecutionRecord = {
+						taskId: task.id,
+						taskTitle: task.title,
+						status: "failed",
+						engineName: resolvedEngineName as AIEngineName,
+						model: taskEngineOptions.modelOverride,
+						engineArgs: taskEngineOptions.engineArgs ?? [],
+						error: errorMsg,
+					};
+					result.taskExecutions.push(rec);
+					logTaskExecutionRecord(rec);
 				}
 			}
 		}

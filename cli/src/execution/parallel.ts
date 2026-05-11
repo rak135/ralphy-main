@@ -33,6 +33,8 @@ import { isRetryableError, withRetry } from "./retry.ts";
 import { commitSandboxChanges } from "./sandbox-git.ts";
 import { cleanupSandbox, createSandbox, getModifiedFiles, getSandboxBase } from "./sandbox.ts";
 import type { ExecutionOptions, ExecutionResult } from "./sequential.ts";
+import { logTaskExecutionRecord } from "./task-execution-logging.ts";
+import type { TaskExecutionRecord } from "./task-execution-record.ts";
 
 interface ParallelAgentResult {
 	task: Task;
@@ -44,6 +46,12 @@ interface ParallelAgentResult {
 	/** Whether this agent used sandbox mode */
 	usedSandbox?: boolean;
 	cancelled?: boolean;
+	/** Resolved engine name used for this task */
+	resolvedEngineName: string;
+	/** Resolved model override (undefined = engine default) */
+	resolvedModel: string | undefined;
+	/** Resolved engine args */
+	resolvedEngineArgs: string[];
 }
 
 /**
@@ -64,8 +72,9 @@ async function runAgentInWorktree(
 	skipTests: boolean,
 	skipLint: boolean,
 	browserEnabled: "auto" | "true" | "false",
-	modelOverride?: string,
-	engineArgs?: string[],
+	resolvedEngineName: string,
+	resolvedModel: string | undefined,
+	resolvedEngineArgs: string[] | undefined,
 ): Promise<ParallelAgentResult> {
 	let worktreeDir = "";
 	let branchName = "";
@@ -116,7 +125,10 @@ async function runAgentInWorktree(
 		});
 
 		// Execute with retry
-		const engineOptions = resolveEngineOptions(task, { modelOverride, engineArgs });
+		const engineOptions = resolveEngineOptions(task, {
+			modelOverride: resolvedModel,
+			engineArgs: resolvedEngineArgs,
+		});
 		const result = await withRetry(
 			async () => {
 				const res = await engine.execute(prompt, worktreeDir, engineOptions);
@@ -128,7 +140,16 @@ async function runAgentInWorktree(
 			{ maxRetries, retryDelay },
 		);
 
-		return { task, agentNum, worktreeDir, branchName, result };
+		return {
+			task,
+			agentNum,
+			worktreeDir,
+			branchName,
+			result,
+			resolvedEngineName,
+			resolvedModel,
+			resolvedEngineArgs: resolvedEngineArgs ?? [],
+		};
 	} catch (error) {
 		if (isCancellationError(error)) {
 			return {
@@ -139,11 +160,24 @@ async function runAgentInWorktree(
 				result: null,
 				error: "Cancelled by user",
 				cancelled: true,
+				resolvedEngineName,
+				resolvedModel,
+				resolvedEngineArgs: resolvedEngineArgs ?? [],
 			};
 		}
 
 		const errorMsg = error instanceof Error ? error.message : String(error);
-		return { task, agentNum, worktreeDir, branchName, result: null, error: errorMsg };
+		return {
+			task,
+			agentNum,
+			worktreeDir,
+			branchName,
+			result: null,
+			error: errorMsg,
+			resolvedEngineName,
+			resolvedModel,
+			resolvedEngineArgs: resolvedEngineArgs ?? [],
+		};
 	}
 }
 
@@ -167,8 +201,9 @@ async function runAgentInSandbox(
 	skipTests: boolean,
 	skipLint: boolean,
 	browserEnabled: "auto" | "true" | "false",
-	modelOverride?: string,
-	engineArgs?: string[],
+	resolvedEngineName: string,
+	resolvedModel: string | undefined,
+	resolvedEngineArgs: string[] | undefined,
 ): Promise<ParallelAgentResult> {
 	const uniqueSuffix = Math.random().toString(36).substring(2, 8);
 	const sandboxDir = join(sandboxBase, `agent-${agentNum}-${uniqueSuffix}`);
@@ -219,7 +254,10 @@ async function runAgentInSandbox(
 		});
 
 		// Execute with retry
-		const engineOptions = resolveEngineOptions(task, { modelOverride, engineArgs });
+		const engineOptions = resolveEngineOptions(task, {
+			modelOverride: resolvedModel,
+			engineArgs: resolvedEngineArgs,
+		});
 		const result = await withRetry(
 			async () => {
 				const res = await engine.execute(prompt, sandboxDir, engineOptions);
@@ -231,7 +269,17 @@ async function runAgentInSandbox(
 			{ maxRetries, retryDelay },
 		);
 
-		return { task, agentNum, worktreeDir: sandboxDir, branchName, result, usedSandbox: true };
+		return {
+			task,
+			agentNum,
+			worktreeDir: sandboxDir,
+			branchName,
+			result,
+			usedSandbox: true,
+			resolvedEngineName,
+			resolvedModel,
+			resolvedEngineArgs: resolvedEngineArgs ?? [],
+		};
 	} catch (error) {
 		if (isCancellationError(error)) {
 			return {
@@ -243,6 +291,9 @@ async function runAgentInSandbox(
 				error: "Cancelled by user",
 				usedSandbox: true,
 				cancelled: true,
+				resolvedEngineName,
+				resolvedModel,
+				resolvedEngineArgs: resolvedEngineArgs ?? [],
 			};
 		}
 
@@ -255,6 +306,9 @@ async function runAgentInSandbox(
 			result: null,
 			error: errorMsg,
 			usedSandbox: true,
+			resolvedEngineName,
+			resolvedModel,
+			resolvedEngineArgs: resolvedEngineArgs ?? [],
 		};
 	}
 }
@@ -306,9 +360,15 @@ export async function runParallel(
 		taskEngine: AIEngine;
 		taskModelOverride: string | undefined;
 		taskEngineArgs: string[] | undefined;
+		taskEngineName: string;
 	} {
 		if (!cliEngineName) {
-			return { taskEngine: engine, taskModelOverride: modelOverride, taskEngineArgs: engineArgs };
+			return {
+				taskEngine: engine,
+				taskModelOverride: modelOverride,
+				taskEngineArgs: engineArgs,
+				taskEngineName: engine.name,
+			};
 		}
 		const resolved = resolveEffectiveExecution(task, prdDefaults, {
 			engineName: cliEngineName,
@@ -320,6 +380,7 @@ export async function runParallel(
 			taskEngine: factory(resolved.engineName),
 			taskModelOverride: resolved.engineOptions.modelOverride,
 			taskEngineArgs: resolved.engineOptions.engineArgs,
+			taskEngineName: resolved.engineName,
 		};
 	}
 
@@ -333,6 +394,7 @@ export async function runParallel(
 		tasksFailed: 0,
 		totalInputTokens: 0,
 		totalOutputTokens: 0,
+		taskExecutions: [],
 	};
 
 	// Determine isolation mode (worktree vs sandbox)
@@ -435,7 +497,8 @@ export async function runParallel(
 		// Run agents in parallel (using sandbox or worktree mode)
 		const promises = batch.map((task) => {
 			globalAgentNum++;
-			const { taskEngine, taskModelOverride, taskEngineArgs } = resolveForTask(task);
+			const { taskEngine, taskModelOverride, taskEngineArgs, taskEngineName } =
+				resolveForTask(task);
 			if (cliEngineName) {
 				logInfo(
 					`    Engine: ${taskEngine.name}${
@@ -459,6 +522,7 @@ export async function runParallel(
 					skipTests,
 					skipLint,
 					browserEnabled,
+					taskEngineName,
 					taskModelOverride,
 					taskEngineArgs,
 				);
@@ -482,6 +546,7 @@ export async function runParallel(
 				skipTests,
 				skipLint,
 				browserEnabled,
+				taskEngineName,
 				taskModelOverride,
 				taskEngineArgs,
 			).then((res) => {
@@ -514,6 +579,9 @@ export async function runParallel(
 				error,
 				usedSandbox: agentUsedSandbox,
 				cancelled,
+				resolvedEngineName,
+				resolvedModel,
+				resolvedEngineArgs,
 			} = agentResult;
 			let branchName = agentResult.branchName;
 			let failureReason: string | undefined = error;
@@ -568,9 +636,31 @@ export async function runParallel(
 						await taskSource.markComplete(task.id);
 						clearDeferredTask(taskSource.type, task, workDir, prdFile);
 						retryableFailure = false;
+						const rec: TaskExecutionRecord = {
+							taskId: task.id,
+							taskTitle: task.title,
+							status: "failed",
+							engineName: resolvedEngineName as AIEngineName,
+							model: resolvedModel,
+							engineArgs: resolvedEngineArgs,
+							error: failureReason,
+						};
+						result.taskExecutions.push(rec);
+						logTaskExecutionRecord(rec);
 					} else {
 						logWarn(`Task "${task.title}" deferred (${deferrals}/${maxRetries}): ${failureReason}`);
 						result.tasksFailed++;
+						const rec: TaskExecutionRecord = {
+							taskId: task.id,
+							taskTitle: task.title,
+							status: "deferred",
+							engineName: resolvedEngineName as AIEngineName,
+							model: resolvedModel,
+							engineArgs: resolvedEngineArgs,
+							error: failureReason,
+						};
+						result.taskExecutions.push(rec);
+						logTaskExecutionRecord(rec);
 					}
 				} else {
 					logError(`Task "${task.title}" failed: ${failureReason}`);
@@ -582,6 +672,17 @@ export async function runParallel(
 					// This prevents infinite retry loops - the task has already been retried maxRetries times
 					await taskSource.markComplete(task.id);
 					clearDeferredTask(taskSource.type, task, workDir, prdFile);
+					const rec: TaskExecutionRecord = {
+						taskId: task.id,
+						taskTitle: task.title,
+						status: "failed",
+						engineName: resolvedEngineName as AIEngineName,
+						model: resolvedModel,
+						engineArgs: resolvedEngineArgs,
+						error: failureReason,
+					};
+					result.taskExecutions.push(rec);
+					logTaskExecutionRecord(rec);
 				}
 			} else if (aiResult?.success) {
 				logSuccess(`Task "${task.title}" completed`);
@@ -594,6 +695,19 @@ export async function runParallel(
 
 				notifyTaskComplete(task.title);
 				clearDeferredTask(taskSource.type, task, workDir, prdFile);
+
+				const rec: TaskExecutionRecord = {
+					taskId: task.id,
+					taskTitle: task.title,
+					status: "completed",
+					engineName: resolvedEngineName as AIEngineName,
+					model: resolvedModel,
+					engineArgs: resolvedEngineArgs,
+					inputTokens: aiResult.inputTokens,
+					outputTokens: aiResult.outputTokens,
+				};
+				result.taskExecutions.push(rec);
+				logTaskExecutionRecord(rec);
 
 				// Track successful branch for merge phase
 				if (branchName) {
@@ -613,10 +727,32 @@ export async function runParallel(
 						await taskSource.markComplete(task.id);
 						clearDeferredTask(taskSource.type, task, workDir, prdFile);
 						retryableFailure = false;
+						const rec: TaskExecutionRecord = {
+							taskId: task.id,
+							taskTitle: task.title,
+							status: "failed",
+							engineName: resolvedEngineName as AIEngineName,
+							model: resolvedModel,
+							engineArgs: resolvedEngineArgs,
+							error: errMsg,
+						};
+						result.taskExecutions.push(rec);
+						logTaskExecutionRecord(rec);
 					} else {
 						logWarn(`Task "${task.title}" deferred (${deferrals}/${maxRetries}): ${errMsg}`);
 						result.tasksFailed++;
 						failureReason = errMsg;
+						const rec: TaskExecutionRecord = {
+							taskId: task.id,
+							taskTitle: task.title,
+							status: "deferred",
+							engineName: resolvedEngineName as AIEngineName,
+							model: resolvedModel,
+							engineArgs: resolvedEngineArgs,
+							error: errMsg,
+						};
+						result.taskExecutions.push(rec);
+						logTaskExecutionRecord(rec);
 					}
 				} else {
 					logError(`Task "${task.title}" failed: ${errMsg}`);
@@ -629,6 +765,17 @@ export async function runParallel(
 					// This prevents infinite retry loops - the task has already been retried maxRetries times
 					await taskSource.markComplete(task.id);
 					clearDeferredTask(taskSource.type, task, workDir, prdFile);
+					const rec: TaskExecutionRecord = {
+						taskId: task.id,
+						taskTitle: task.title,
+						status: "failed",
+						engineName: resolvedEngineName as AIEngineName,
+						model: resolvedModel,
+						engineArgs: resolvedEngineArgs,
+						error: errMsg,
+					};
+					result.taskExecutions.push(rec);
+					logTaskExecutionRecord(rec);
 				}
 			}
 
