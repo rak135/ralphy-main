@@ -1,4 +1,4 @@
-# Claude Code Guidelines for Ralphy
+# Agent Guidelines for Ralphy
 
 ## Code Change Philosophy
 
