@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import simpleGit from "simple-git";
 import type { AIEngine } from "../engines/types.ts";
-import { JsonTaskSource } from "../tasks/json.ts";
 import { CachedTaskSource } from "../tasks/index.ts";
+import { JsonTaskSource } from "../tasks/json.ts";
 import { runSequential } from "./sequential.ts";
 
 function createSuccessfulEngine(fileName = "implementation.txt"): AIEngine {

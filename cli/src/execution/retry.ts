@@ -1,5 +1,5 @@
-import { isCancellationError, throwIfCancellationRequested } from "./cancel.ts";
 import { logDebug, logWarn } from "../ui/logger.ts";
+import { isCancellationError, throwIfCancellationRequested } from "./cancel.ts";
 
 interface RetryOptions {
 	maxRetries: number;

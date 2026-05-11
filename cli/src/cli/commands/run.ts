@@ -4,10 +4,7 @@ import type { RuntimeOptions } from "../../config/types.ts";
 import { createEngine, isEngineAvailable } from "../../engines/index.ts";
 import type { AIEngineName } from "../../engines/types.ts";
 import { isBrowserAvailable } from "../../execution/browser.ts";
-import {
-	installCancellationHandlers,
-	isCancellationRequested,
-} from "../../execution/cancel.ts";
+import { installCancellationHandlers, isCancellationRequested } from "../../execution/cancel.ts";
 import { runParallel } from "../../execution/parallel.ts";
 import { type ExecutionResult, runSequential } from "../../execution/sequential.ts";
 import { getDefaultBaseBranch } from "../../git/branch.ts";

@@ -12,6 +12,10 @@ export interface Task {
 	parallelGroup?: number;
 	/** Whether the task is completed */
 	completed: boolean;
+	/** Per-task model override (overrides global --model for this task only) */
+	model?: string;
+	/** Per-task engine args (replace global engineArgs for this task only) */
+	engineArgs?: string[];
 }
 
 /**

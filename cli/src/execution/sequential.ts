@@ -12,15 +12,14 @@ import { notifyTaskComplete, notifyTaskFailed } from "../ui/notify.ts";
 import { ProgressSpinner } from "../ui/spinner.ts";
 import { isCancellationError } from "./cancel.ts";
 import { clearDeferredTask, recordDeferredTask } from "./deferred.ts";
+import { resolveEngineOptions } from "./engine-options.ts";
 import { buildPrompt } from "./prompt.ts";
 import { isFatalError, isRetryableError, sleep, withRetry } from "./retry.ts";
 
 function getStateFilePaths(workDir: string, prdFile?: string): string[] {
-	const stateFiles = [
-		prdFile,
-		".ralphy/config.yaml",
-		".ralphy/progress.txt",
-	].filter((file): file is string => Boolean(file));
+	const stateFiles = [prdFile, ".ralphy/config.yaml", ".ralphy/progress.txt"].filter(
+		(file): file is string => Boolean(file),
+	);
 
 	const paths: string[] = [];
 	const seen = new Set<string>();
@@ -224,10 +223,7 @@ export async function runSequential(options: ExecutionOptions): Promise<Executio
 						spinner.updateStep("Working");
 
 						// Use streaming if available
-						const engineOptions = {
-							...(modelOverride && { modelOverride }),
-							...(engineArgs && engineArgs.length > 0 && { engineArgs }),
-						};
+						const engineOptions = resolveEngineOptions(task, { modelOverride, engineArgs });
 						if (engine.executeStreaming) {
 							return await engine.executeStreaming(
 								prompt,

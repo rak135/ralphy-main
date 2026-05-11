@@ -155,6 +155,12 @@ tasks:
     completed: false
   - title: add dashboard
     completed: false
+  - title: call external API
+    completed: false
+    model: claude-opus-4-5        # optional: override model for this task
+    engine_args:                  # optional: replace global engine args for this task
+      - --max-tokens
+      - "4096"
 ```
 
 **JSON**:
@@ -169,6 +175,12 @@ ralphy --json PRD.json
       "completed": false,
       "parallel_group": 1,
       "description": "Optional details"
+    },
+    {
+      "title": "call external API",
+      "completed": false,
+      "model": "claude-opus-4-5",
+      "engine_args": ["--max-tokens", "4096"]
     }
   ]
 }

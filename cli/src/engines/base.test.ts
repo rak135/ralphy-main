@@ -112,11 +112,7 @@ describe("execCommand cancellation", () => {
 	it("kills the active child process and rejects with CancellationError", async () => {
 		const workDir = mkdtempSync(join(tmpdir(), "ralphy-cancel-"));
 		try {
-			const command = execCommand(
-				"node",
-				["-e", "setTimeout(() => {}, 10000)"],
-				workDir,
-			);
+			const command = execCommand("node", ["-e", "setTimeout(() => {}, 10000)"], workDir);
 
 			setTimeout(() => {
 				requestCancellation();

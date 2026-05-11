@@ -7,6 +7,8 @@ interface YamlTask {
 	completed?: boolean;
 	parallel_group?: number;
 	description?: string;
+	model?: string;
+	engine_args?: string[];
 }
 
 interface YamlTaskFile {
@@ -48,6 +50,8 @@ export class YamlTaskSource implements TaskSource {
 				body: t.description,
 				parallelGroup: t.parallel_group,
 				completed: false,
+				model: t.model,
+				engineArgs: t.engine_args,
 			}));
 	}
 
@@ -88,6 +92,8 @@ export class YamlTaskSource implements TaskSource {
 				body: t.description,
 				parallelGroup: t.parallel_group,
 				completed: false,
+				model: t.model,
+				engineArgs: t.engine_args,
 			}));
 	}
 

@@ -6,6 +6,8 @@ interface JsonTask {
 	completed?: boolean;
 	parallel_group?: number;
 	description?: string;
+	model?: string;
+	engine_args?: string[];
 }
 
 interface JsonTaskFile {
@@ -63,6 +65,8 @@ export class JsonTaskSource implements TaskSource {
 				body: task.description,
 				parallelGroup: task.parallel_group,
 				completed: false,
+				model: task.model,
+				engineArgs: task.engine_args,
 			}));
 	}
 
@@ -109,6 +113,8 @@ export class JsonTaskSource implements TaskSource {
 				body: task.description,
 				parallelGroup: task.parallel_group,
 				completed: false,
+				model: task.model,
+				engineArgs: task.engine_args,
 			}));
 	}
 

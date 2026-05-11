@@ -25,6 +25,7 @@ import { notifyTaskComplete, notifyTaskFailed } from "../ui/notify.ts";
 import { isCancellationError, isCancellationRequested } from "./cancel.ts";
 import { resolveConflictsWithAI } from "./conflict-resolution.ts";
 import { clearDeferredTask, recordDeferredTask } from "./deferred.ts";
+import { resolveEngineOptions } from "./engine-options.ts";
 import { buildParallelPrompt } from "./prompt.ts";
 import { isRetryableError, withRetry } from "./retry.ts";
 import { commitSandboxChanges } from "./sandbox-git.ts";
@@ -113,10 +114,7 @@ async function runAgentInWorktree(
 		});
 
 		// Execute with retry
-		const engineOptions = {
-			...(modelOverride && { modelOverride }),
-			...(engineArgs && engineArgs.length > 0 && { engineArgs }),
-		};
+		const engineOptions = resolveEngineOptions(task, { modelOverride, engineArgs });
 		const result = await withRetry(
 			async () => {
 				const res = await engine.execute(prompt, worktreeDir, engineOptions);
@@ -219,10 +217,7 @@ async function runAgentInSandbox(
 		});
 
 		// Execute with retry
-		const engineOptions = {
-			...(modelOverride && { modelOverride }),
-			...(engineArgs && engineArgs.length > 0 && { engineArgs }),
-		};
+		const engineOptions = resolveEngineOptions(task, { modelOverride, engineArgs });
 		const result = await withRetry(
 			async () => {
 				const res = await engine.execute(prompt, sandboxDir, engineOptions);

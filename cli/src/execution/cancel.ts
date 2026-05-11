@@ -39,11 +39,7 @@ export function throwIfCancellationRequested(): void {
 	}
 }
 
-export function registerActiveProcess(
-	label: string,
-	pid?: number,
-	kill?: () => void,
-): () => void {
+export function registerActiveProcess(label: string, pid?: number, kill?: () => void): () => void {
 	const activeProcess: ActiveProcess = { label, pid, kill };
 	activeProcesses.add(activeProcess);
 
